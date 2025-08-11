@@ -22,6 +22,7 @@ import (
 	"github.com/yugabyte/pgx/v5"
 
 	"github.com/filecoin-project/go-commp-utils/nonffi"
+	commcid "github.com/filecoin-project/go-fil-commcid"
 	"github.com/filecoin-project/go-state-types/abi"
 
 	"github.com/filecoin-project/curio/harmony/harmonydb"
@@ -817,12 +818,11 @@ func (p *PDPService) handleAddPieceToDataSet(w http.ResponseWriter, r *http.Requ
 
 	// Prepare PieceData array for Ethereum transaction
 	// Define a Struct that matches the Solidity PieceData struct
-	type PieceData struct {
-		Piece   struct{ Data []byte }
-		RawSize *big.Int
+	type PieceCid struct {
+		Data []byte
 	}
 
-	var pieceDataArray []PieceData
+	var pieceCidArray []PieceCid
 
 	for _, addPieceReq := range payload.Pieces {
 		// Convert PieceCid to bytes
@@ -846,20 +846,23 @@ func (p *PDPService) handleAddPieceToDataSet(w http.ResponseWriter, r *http.Requ
 			prevSubPieceSize = subPieceInfo.PieceInfo.Size
 			totalSize += uint64(subPieceInfo.PieceInfo.Size)
 		}
-
-		// Prepare PieceData for Ethereum transaction
-		pieceData := PieceData{
-			Piece:   struct{ Data []byte }{Data: pieceCid.Bytes()},
-			RawSize: new(big.Int).SetUint64(totalSize),
+		pieceCidV2, err := commcid.PieceCidV2FromV1(pieceCid, totalSize)
+		if err != nil {
+			http.Error(w, "Failed to generate PieceCidV2: "+err.Error(), http.StatusInternalServerError)
+			return
 		}
 
-		pieceDataArray = append(pieceDataArray, pieceData)
+		// Prepare PieceData for Ethereum transaction
+		pieceData := PieceCid{
+			Data: pieceCidV2.Bytes(),
+		}
+		pieceCidArray = append(pieceCidArray, pieceData)
 	}
 
 	// Step 6: Prepare the Ethereum transaction
 	// Pack the method call data
 	// The extraDataBytes variable is now correctly populated above
-	data, err := abiData.Pack("addPieces", dataSetId, pieceDataArray, extraDataBytes)
+	data, err := abiData.Pack("addPieces", dataSetId, pieceCidArray, extraDataBytes)
 	if err != nil {
 		http.Error(w, "Failed to pack method call: "+err.Error(), http.StatusInternalServerError)
 		return
